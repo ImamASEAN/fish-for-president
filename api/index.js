@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { readFileSync, existsSync, statSync } from "fs";
 import { extname, join, normalize } from "path";
 
 const contentTypes = {
@@ -30,34 +30,53 @@ export default function handler(req, res) {
       return;
     }
 
-    // Try to read the file
-    let fileContent;
-    try {
-      fileContent = readFileSync(filePath, "utf-8");
-    } catch (err) {
-      // Try index.html for directory requests
-      if (requestedPath.endsWith("/") || !extname(requestedPath)) {
-        try {
-          fileContent = readFileSync(join(filePath, "index.html"), "utf-8");
-          res.setHeader("Content-Type", contentTypes[".html"]);
-          res.status(200).end(fileContent);
-          return;
-        } catch {
-          res.status(404).end("Not found");
-          return;
+    // Try multiple candidate roots because Vercel serverless may set cwd to /var/task/api
+    const candidates = [filePath, normalize(join(process.cwd(), "..", requestedPath))];
+
+    let foundPath = null;
+    for (const p of candidates) {
+      try {
+        if (existsSync(p) && !statSync(p).isDirectory()) {
+          foundPath = p;
+          break;
         }
+      } catch (_) {
+        // ignore
       }
+    }
+
+    // If directory or no ext, try index.html in candidate directories
+    if (!foundPath) {
+      for (const p of candidates) {
+        try {
+          const idx = join(p, "index.html");
+          if (existsSync(idx)) {
+            foundPath = idx;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (!foundPath) {
       res.status(404).end("Not found");
       return;
     }
 
-    // Set content type
-    const ext = extname(filePath);
+    const ext = extname(foundPath);
     const contentType = contentTypes[ext] || "application/octet-stream";
-    
+
+    // Serve as buffer for binary files
+    const isText = [".html", ".css", ".js", ".mjs", ".json", ".svg"].includes(ext);
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=3600");
-    res.status(200).end(fileContent);
+    if (isText) {
+      const fileContent = readFileSync(foundPath, "utf-8");
+      res.status(200).end(fileContent);
+    } else {
+      const fileContent = readFileSync(foundPath);
+      res.status(200).end(fileContent);
+    }
 
   } catch (err) {
     console.error("Error:", err);
