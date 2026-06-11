@@ -1,0 +1,14 @@
+{
+  "name": "fish-for-president",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "node scripts/server.mjs",
+    "test": "node --test",
+    "build": "echo 'Build complete'",
+    "start": "node scripts/server.mjs"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
