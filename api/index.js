@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, statSync } from "fs";
-import { extname, join, normalize } from "path";
+import { fileURLToPath } from "url";
+import { dirname, extname, join, normalize } from "path";
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -15,49 +16,42 @@ const contentTypes = {
   ".webp": "image/webp"
 };
 
+const currentDir = dirname(fileURLToPath(import.meta.url));
+
+function findFile(requestedPath) {
+  const searchDirs = new Set();
+  let cursor = currentDir;
+
+  for (let i = 0; i < 8; i += 1) {
+    searchDirs.add(normalize(cursor));
+    cursor = dirname(cursor);
+  }
+  searchDirs.add(normalize(process.cwd()));
+  searchDirs.add(normalize(join(process.cwd(), "..")));
+
+  for (const dir of searchDirs) {
+    const candidate = normalize(join(dir, requestedPath));
+    if (existsSync(candidate) && !statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  }
+
+  for (const dir of searchDirs) {
+    const candidate = normalize(join(dir, requestedPath, "index.html"));
+    if (existsSync(candidate) && !statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 export default function handler(req, res) {
   try {
-    // Decode URL and get requested path
     const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
     const requestedPath = pathname === "/" ? "index.html" : pathname.slice(1);
-    
-    // Security: prevent directory traversal
-    const filePath = normalize(join(process.cwd(), requestedPath));
-    const projectRoot = normalize(process.cwd());
-    
-    if (!filePath.startsWith(projectRoot)) {
-      res.status(403).end("Forbidden");
-      return;
-    }
 
-    // Try multiple candidate roots because Vercel serverless may set cwd to /var/task/api
-    const candidates = [filePath, normalize(join(process.cwd(), "..", requestedPath))];
-
-    let foundPath = null;
-    for (const p of candidates) {
-      try {
-        if (existsSync(p) && !statSync(p).isDirectory()) {
-          foundPath = p;
-          break;
-        }
-      } catch (_) {
-        // ignore
-      }
-    }
-
-    // If directory or no ext, try index.html in candidate directories
-    if (!foundPath) {
-      for (const p of candidates) {
-        try {
-          const idx = join(p, "index.html");
-          if (existsSync(idx)) {
-            foundPath = idx;
-            break;
-          }
-        } catch (_) {}
-      }
-    }
-
+    const foundPath = findFile(requestedPath);
     if (!foundPath) {
       res.status(404).end("Not found");
       return;
@@ -65,19 +59,16 @@ export default function handler(req, res) {
 
     const ext = extname(foundPath);
     const contentType = contentTypes[ext] || "application/octet-stream";
-
-    // Serve as buffer for binary files
     const isText = [".html", ".css", ".js", ".mjs", ".json", ".svg"].includes(ext);
+
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=3600");
-    if (isText) {
-      const fileContent = readFileSync(foundPath, "utf-8");
-      res.status(200).end(fileContent);
-    } else {
-      const fileContent = readFileSync(foundPath);
-      res.status(200).end(fileContent);
-    }
 
+    if (isText) {
+      res.status(200).end(readFileSync(foundPath, "utf-8"));
+    } else {
+      res.status(200).end(readFileSync(foundPath));
+    }
   } catch (err) {
     console.error("Error:", err);
     res.status(500).end("Internal Server Error");
